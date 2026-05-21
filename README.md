@@ -36,6 +36,120 @@ conda activate scenepilot
 pip install -r requirements.txt
 ```
 
+## Batch video downloader from Excel
+
+The repository now includes `video_batch_downloader.py`, a standalone script for reading an Excel/CSV file and downloading video links from platforms such as YouTube and Bilibili with `yt-dlp`.
+
+### Supported manifest columns
+
+The script auto-detects these logical columns and also supports the Chinese aliases below:
+
+- first-level folder: `folder_name` / `文件夹名称`
+- slice folder: `slice_name` / `切片文件夹`
+- video url: `video_url` / `视频链接`
+- sequence or name (optional): `序号`
+
+Example table:
+
+| 文件夹名称 | 切片文件夹 | 序号 | 视频链接 |
+| --- | --- | --- | --- |
+| 城市场景 | 路口 | 01 | https://www.youtube.com/watch?v=... |
+| 城市场景 | 路口 | 02 | https://www.bilibili.com/video/BV... |
+| 高速场景 | 夜间 | 01 | https://www.youtube.com/watch?v=... |
+
+The output structure is:
+
+```text
+downloads/
+  城市场景/
+    路口/
+      01.mp4
+      02.mp4
+  高速场景/
+    夜间/
+      01.mp4
+```
+
+### Dry run first
+
+Use `--plan-only` first to verify the parsed rows and output paths without downloading:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --plan-only
+```
+
+### Start the download
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads
+```
+
+If your sheet uses custom headers, pass them explicitly:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --folder-column "一级目录" \
+  --slice-column "切片目录" \
+  --name-column "编号" \
+  --url-column "链接"
+```
+
+### Stability and anti-bot precautions
+
+The script enables a conservative download profile by default:
+
+- single-fragment concurrency to reduce burst requests
+- randomized sleep between tasks and requests
+- extractor retries plus task-level retries with exponential backoff
+- resume support via `--continue`
+- optional rate limiting via `--limit-rate`
+- optional proxy via `--proxy`
+- CSV report generation for retrying failed rows later
+
+For YouTube/Bilibili, authenticated cookies usually improve stability for rate-limited or age-gated content:
+
+```bash
+# Use exported cookies.txt
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-file /path/to/cookies.txt
+```
+
+```bash
+# Or read cookies from a local browser profile
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-browser chrome
+```
+
+Additional useful flags:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --limit-rate 2M \
+  --sleep-interval 3 \
+  --max-sleep-interval 8 \
+  --sleep-requests 1.5 \
+  --proxy socks5://127.0.0.1:7890
+```
+
+Notes:
+
+- `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`.
+- `downloads/download_report.csv` records `downloaded`, `skipped_existing`, and `failed` rows.
+- Please make sure your downloads comply with the target platform's terms and the content owner's rights.
+
 # 🚀 Inference
 
 ```bash
