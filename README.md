@@ -113,6 +113,7 @@ The script enables a conservative download profile by default:
 - automatic cleanup of Bilibili share tracking query parameters
 - optional rate limiting via `--limit-rate`
 - optional proxy via `--proxy`
+- optional YouTube-only proxy routing via `--youtube-proxy` or `--youtube-proxy-port`
 - optional browser impersonation via `--impersonate`
 - CSV report generation for retrying failed rows later
 
@@ -196,6 +197,32 @@ python3 video_batch_downloader.py \
   --sleep-requests 1.5 \
   --proxy socks5://127.0.0.1:7890
 ```
+
+If your sheet mixes Bilibili and YouTube links, you can keep Bilibili on the direct connection while routing only YouTube through a local proxy:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --youtube-proxy http://127.0.0.1:7897
+```
+
+Or just provide the local port:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --youtube-proxy-port 7897
+```
+
+This is useful when:
+
+- Bilibili works better without VPN / proxy
+- YouTube requires a proxy in your network
+- you want one mixed Excel file to run in a single pass
+
+When `--youtube-proxy` or `--youtube-proxy-port` is set, the script logs that YouTube rows use the proxy while Bilibili rows stay direct.
 
 Notes:
 

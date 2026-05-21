@@ -178,6 +178,23 @@ def parse_args() -> argparse.Namespace:
         help="Optional HTTP/SOCKS proxy passed to yt-dlp, e.g. socks5://127.0.0.1:7890",
     )
     parser.add_argument(
+        "--youtube-proxy",
+        default=None,
+        help=(
+            "Proxy used only for YouTube URLs, e.g. http://127.0.0.1:7897. "
+            "When set, Bilibili still uses a direct connection by default."
+        ),
+    )
+    parser.add_argument(
+        "--youtube-proxy-port",
+        type=int,
+        default=None,
+        help=(
+            "Convenience option for a local YouTube proxy port, e.g. 7897. "
+            "Equivalent to --youtube-proxy http://127.0.0.1:<port>."
+        ),
+    )
+    parser.add_argument(
         "--user-agent",
         default=DEFAULT_USER_AGENT,
         help="User-Agent header used by yt-dlp. Default is a recent Chrome UA.",
@@ -489,6 +506,15 @@ def is_bilibili_url(url: str) -> bool:
     return "bilibili.com" in hostname or hostname.endswith("b23.tv")
 
 
+def is_youtube_url(url: str) -> bool:
+    hostname = urlparse(url).netloc.lower()
+    return (
+        "youtube.com" in hostname
+        or hostname.endswith("youtu.be")
+        or hostname.endswith("youtube-nocookie.com")
+    )
+
+
 def normalize_download_url(url: str) -> str:
     parsed = urlparse(url.strip())
     hostname = parsed.netloc.lower()
@@ -517,6 +543,21 @@ def build_site_headers(url: str) -> list[str]:
     return ["Accept-Language:zh-CN,zh;q=0.9,en;q=0.8"]
 
 
+def resolve_youtube_proxy(args: argparse.Namespace) -> str | None:
+    if args.youtube_proxy:
+        return args.youtube_proxy
+    if args.youtube_proxy_port:
+        return f"http://127.0.0.1:{args.youtube_proxy_port}"
+    return None
+
+
+def resolve_proxy_for_task(task: VideoTask, args: argparse.Namespace) -> str | None:
+    youtube_proxy = resolve_youtube_proxy(args)
+    if is_youtube_url(task.url) and youtube_proxy:
+        return youtube_proxy
+    return args.proxy
+
+
 @lru_cache(maxsize=1)
 def ffmpeg_available() -> bool:
     return which("ffmpeg") is not None
@@ -532,6 +573,7 @@ def warn_ffmpeg_missing_once() -> None:
 
 def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]:
     normalized_url = normalize_download_url(task.url)
+    task_proxy = resolve_proxy_for_task(task, args)
     command = [
         sys.executable,
         "-m",
@@ -573,8 +615,8 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         command.append("--no-playlist")
     if args.limit_rate:
         command.extend(["--limit-rate", args.limit_rate])
-    if args.proxy:
-        command.extend(["--proxy", args.proxy])
+    if task_proxy:
+        command.extend(["--proxy", task_proxy])
     if args.impersonate:
         command.extend(["--impersonate", args.impersonate])
     if args.cookies_file:
@@ -671,6 +713,18 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
         if attempt == 1:
             sleep_before_task(task, args)
         command = build_yt_dlp_command(task, args)
+        active_proxy = resolve_proxy_for_task(task, args)
+        if active_proxy:
+            logging.info(
+                "Row %s routing via proxy %s",
+                task.row_number,
+                active_proxy,
+            )
+        elif is_bilibili_url(task.url) and resolve_youtube_proxy(args):
+            logging.info(
+                "Row %s uses direct connection for Bilibili.",
+                task.row_number,
+            )
         logging.info(
             "Downloading row %s -> %s/%s/%s (attempt %s/%s)",
             task.row_number,
