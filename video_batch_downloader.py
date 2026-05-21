@@ -39,6 +39,7 @@ COLUMN_ALIASES = {
         "二级文件夹",
         "切片",
         "切片文件夹",
+        "切片文件夹名称",
         "切片名称",
         "子文件夹",
     ],
@@ -49,8 +50,10 @@ COLUMN_ALIASES = {
         "video_link",
         "播放链接",
         "视频链接",
+        "网络链接",
         "链接",
         "网址",
+        "视频网址",
     ],
     "name": [
         "name",
@@ -277,10 +280,25 @@ def resolve_column(
         if original is not None:
             return original
 
+    alias_tokens = [normalize_column_name(alias) for alias in COLUMN_ALIASES[logical_name]]
+    partial_matches: list[str] = []
+    for normalized_name, original_name in normalized_to_original.items():
+        if any(
+            alias_token and (
+                alias_token in normalized_name or normalized_name in alias_token
+            )
+            for alias_token in alias_tokens
+        ):
+            partial_matches.append(original_name)
+
+    if len(partial_matches) == 1:
+        return partial_matches[0]
+
     if required:
         raise ValueError(
             f"Could not detect the {logical_name} column automatically. "
-            f"Available columns: {list(frame.columns)}"
+            f"Available columns: {list(frame.columns)}. "
+            f"You can also pass --{logical_name}-column explicitly."
         )
     return None
 
