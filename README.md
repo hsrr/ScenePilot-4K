@@ -135,6 +135,12 @@ python3 video_batch_downloader.py \
   --cookies-browser chrome
 ```
 
+On Windows, `--cookies-browser chrome` can fail with `Could not copy Chrome cookie database` if Chrome/Edge is still running and the cookies DB is locked. The quickest fixes are:
+
+1. fully close the browser first, including background processes in Task Manager
+2. rerun the downloader
+3. if you do not want to close the browser, export `cookies.txt` manually and use `--cookies-file`
+
 For Bilibili specifically, `HTTP Error 412` usually means anti-bot blocking. In practice, the most effective order is:
 
 1. open the exact Bilibili video in a normal browser first

@@ -672,6 +672,14 @@ def sleep_before_task(task: VideoTask, args: argparse.Namespace) -> None:
 
 
 def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str) -> str:
+    if "Could not copy Chrome cookie database" in output:
+        return (
+            "yt-dlp could not read Chrome cookies because the browser cookie database "
+            "is locked on Windows. Fully exit Chrome/Edge first (check Task Manager), "
+            "then rerun. If you do not want to close the browser, export cookies to "
+            "cookies.txt and use --cookies-file instead."
+        )
+
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output
     ):
@@ -694,6 +702,8 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
 
 
 def is_retryable_failure(task: VideoTask, output: str) -> bool:
+    if "Could not copy Chrome cookie database" in output:
+        return False
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output
     ):
@@ -745,7 +755,7 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
 
         if not is_retryable_failure(task, command_output):
             logging.warning(
-                "Row %s hit a known non-retryable anti-bot block; skipping remaining retries.",
+                "Row %s hit a known non-retryable error; skipping remaining retries.",
                 task.row_number,
             )
             break
