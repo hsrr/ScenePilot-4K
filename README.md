@@ -169,8 +169,14 @@ Why `yt-dlp` here instead of separate libraries?
 
 To make the crawl less bursty, the script now also sleeps a random amount before **every video row** by default:
 
-- `--task-sleep-min 5`
-- `--task-sleep-max 15`
+- `--task-sleep-min 1`
+- `--task-sleep-max 3`
+
+The downloader also supports controlled parallelism:
+
+- `--workers 3` total workers by default
+- `--youtube-workers 3` so YouTube can run in parallel
+- `--bilibili-workers 1` so Bilibili stays conservative and is less likely to trigger anti-bot blocks
 
 You can tune or disable it:
 
@@ -189,6 +195,18 @@ python3 video_batch_downloader.py \
   --output-root downloads \
   --task-sleep-min 0 \
   --task-sleep-max 0
+```
+
+```bash
+# Faster mixed-platform run: parallel YouTube, conservative Bilibili
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --workers 4 \
+  --youtube-workers 4 \
+  --bilibili-workers 1 \
+  --task-sleep-min 1 \
+  --task-sleep-max 3
 ```
 
 Additional useful flags:

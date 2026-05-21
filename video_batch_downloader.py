@@ -10,10 +10,12 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from shutil import which
+from threading import Lock, Semaphore
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -86,6 +88,7 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
 _FFMPEG_WARNING_EMITTED = False
+_OUTPUT_LOCK = Lock()
 
 
 @dataclass
@@ -228,7 +231,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--task-sleep-min",
         type=float,
-        default=5.0,
+        default=1.0,
         help=(
             "Random sleep lower bound before each video task, in seconds. "
             "Default: %(default)s"
@@ -237,11 +240,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--task-sleep-max",
         type=float,
-        default=15.0,
+        default=3.0,
         help=(
             "Random sleep upper bound before each video task, in seconds. "
             "Default: %(default)s"
         ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=3,
+        help="Total concurrent download workers. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--bilibili-workers",
+        type=int,
+        default=1,
+        help="Maximum concurrent Bilibili downloads. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--youtube-workers",
+        type=int,
+        default=3,
+        help="Maximum concurrent YouTube downloads. Default: %(default)s",
     )
     parser.add_argument(
         "--task-retries",
@@ -515,6 +536,14 @@ def is_youtube_url(url: str) -> bool:
     )
 
 
+def task_platform(task: VideoTask) -> str:
+    if is_bilibili_url(task.url):
+        return "bilibili"
+    if is_youtube_url(task.url):
+        return "youtube"
+    return "other"
+
+
 def normalize_download_url(url: str) -> str:
     parsed = urlparse(url.strip())
     hostname = parsed.netloc.lower()
@@ -648,7 +677,8 @@ def run_command_with_live_output(command: list[str]) -> tuple[int, str]:
 
     captured_lines: list[str] = []
     for line in process.stdout:
-        print(line, end="")
+        with _OUTPUT_LOCK:
+            print(line, end="")
         captured_lines.append(line)
     return process.wait(), "".join(captured_lines)
 
@@ -782,6 +812,46 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def build_semaphores(args: argparse.Namespace) -> dict[str, Semaphore]:
+    return {
+        "bilibili": Semaphore(max(1, args.bilibili_workers)),
+        "youtube": Semaphore(max(1, args.youtube_workers)),
+    }
+
+
+def run_task_with_limits(
+    task: VideoTask,
+    args: argparse.Namespace,
+    semaphores: dict[str, Semaphore],
+) -> dict[str, Any]:
+    platform = task_platform(task)
+    semaphore = semaphores.get(platform)
+    if semaphore is None:
+        return download_task(task, args)
+
+    with semaphore:
+        return download_task(task, args)
+
+
+def run_downloads(tasks: list[VideoTask], args: argparse.Namespace) -> list[dict[str, Any]]:
+    worker_count = max(1, args.workers)
+    if worker_count == 1:
+        return [download_task(task, args) for task in tasks]
+
+    semaphores = build_semaphores(args)
+    results_by_index: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_index = {
+            executor.submit(run_task_with_limits, task, args, semaphores): index
+            for index, task in enumerate(tasks)
+        }
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            results_by_index[index] = future.result()
+
+    return [results_by_index[index] for index in range(len(tasks))]
+
+
 def build_report_row(
     task: VideoTask,
     status: str,
@@ -854,7 +924,13 @@ def main() -> int:
         logging.info("Plan saved to %s", report_path)
         return 0
 
-    results = [download_task(task, args) for task in tasks]
+    logging.info(
+        "Starting downloads with workers=%s bilibili_workers=%s youtube_workers=%s",
+        max(1, args.workers),
+        max(1, args.bilibili_workers),
+        max(1, args.youtube_workers),
+    )
+    results = run_downloads(tasks, args)
     write_report(report_path, results)
 
     failed_count = sum(result["status"] == "failed" for result in results)
