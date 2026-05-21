@@ -109,8 +109,11 @@ The script enables a conservative download profile by default:
 - randomized sleep between tasks and requests
 - extractor retries plus task-level retries with exponential backoff
 - resume support via `--continue`
+- Bilibili-specific `Referer` / `Origin` headers
+- automatic cleanup of Bilibili share tracking query parameters
 - optional rate limiting via `--limit-rate`
 - optional proxy via `--proxy`
+- optional browser impersonation via `--impersonate`
 - CSV report generation for retrying failed rows later
 
 For YouTube/Bilibili, authenticated cookies usually improve stability for rate-limited or age-gated content:
@@ -129,6 +132,23 @@ python3 video_batch_downloader.py \
   --input manifest.xlsx \
   --output-root downloads \
   --cookies-browser chrome
+```
+
+For Bilibili specifically, `HTTP Error 412` usually means anti-bot blocking. In practice, the most effective order is:
+
+1. open the exact Bilibili video in a normal browser first
+2. rerun with `--cookies-browser chrome` (or `edge` / `firefox`)
+3. if your current IP is a VPN / server / data-center exit, switch to a residential or home network
+4. optionally install `curl-cffi` and try `--impersonate chrome`
+
+Example:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-browser chrome \
+  --impersonate chrome
 ```
 
 Additional useful flags:

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 from typing import Any, Iterable
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import pandas as pd
 
@@ -69,6 +70,16 @@ COLUMN_ALIASES = {
 }
 
 TEMP_FILE_SUFFIXES = {".part", ".ytdl", ".temp"}
+MEDIA_SUFFIXES = {
+    ".mp4",
+    ".mkv",
+    ".mov",
+    ".flv",
+    ".avi",
+    ".webm",
+    ".m4v",
+    ".ts",
+}
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
@@ -168,6 +179,14 @@ def parse_args() -> argparse.Namespace:
         "--user-agent",
         default=DEFAULT_USER_AGENT,
         help="User-Agent header used by yt-dlp. Default is a recent Chrome UA.",
+    )
+    parser.add_argument(
+        "--impersonate",
+        default=None,
+        help=(
+            "Optional yt-dlp client impersonation target, e.g. chrome. "
+            "Works best when curl-cffi is installed."
+        ),
     )
     parser.add_argument(
         "--sleep-interval",
@@ -313,6 +332,13 @@ def sanitize_path_component(value: Any, fallback: str) -> str:
     return text or fallback
 
 
+def strip_media_extension(value: str) -> str:
+    suffix = Path(value).suffix.lower()
+    if suffix in MEDIA_SUFFIXES:
+        return value[: -len(suffix)].rstrip()
+    return value
+
+
 def value_is_missing(value: Any) -> bool:
     if value is None:
         return True
@@ -335,7 +361,10 @@ def format_base_name(raw_value: Any, default_index: int, width: int) -> str:
     if digits_only:
         return f"{int(float(text)):0{width}d}"
 
-    cleaned = sanitize_path_component(text, fallback=f"{default_index:0{width}d}")
+    cleaned = sanitize_path_component(
+        strip_media_extension(text),
+        fallback=f"{default_index:0{width}d}",
+    )
     return cleaned
 
 
@@ -435,7 +464,41 @@ def find_existing_download(output_stem: Path) -> Path | None:
     return None
 
 
+def is_bilibili_url(url: str) -> bool:
+    hostname = urlparse(url).netloc.lower()
+    return "bilibili.com" in hostname or hostname.endswith("b23.tv")
+
+
+def normalize_download_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    hostname = parsed.netloc.lower()
+    if not parsed.scheme or not hostname:
+        return url.strip()
+
+    if "bilibili.com" in hostname or hostname.endswith("b23.tv"):
+        kept_pairs = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key.lower() in {"p", "t"}
+        ]
+        return urlunparse(parsed._replace(query=urlencode(kept_pairs), fragment=""))
+
+    return url.strip()
+
+
+def build_site_headers(url: str) -> list[str]:
+    if is_bilibili_url(url):
+        return [
+            "Accept-Language:zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer:https://www.bilibili.com/",
+            "Origin:https://www.bilibili.com",
+        ]
+
+    return ["Accept-Language:zh-CN,zh;q=0.9,en;q=0.8"]
+
+
 def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]:
+    normalized_url = normalize_download_url(task.url)
     command = [
         sys.executable,
         "-m",
@@ -459,13 +522,14 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         "1",
         "--user-agent",
         args.user_agent,
-        "--add-header",
-        "Accept-Language:zh-CN,zh;q=0.9,en;q=0.8",
         "--format",
         args.format,
         "--output",
         str(task.output_dir / f"{task.base_name}.%(ext)s"),
     ]
+
+    for header in build_site_headers(normalized_url):
+        command.extend(["--add-header", header])
 
     if args.verbose:
         command.append("--verbose")
@@ -478,6 +542,8 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         command.extend(["--limit-rate", args.limit_rate])
     if args.proxy:
         command.extend(["--proxy", args.proxy])
+    if args.impersonate:
+        command.extend(["--impersonate", args.impersonate])
     if args.cookies_file:
         command.extend(["--cookies", args.cookies_file])
     elif args.cookies_browser:
@@ -490,8 +556,48 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
     else:
         logging.warning("ffmpeg not found, keeping the original container format.")
 
-    command.append(task.url)
+    command.append(normalized_url)
     return command
+
+
+def run_command_with_live_output(command: list[str]) -> tuple[int, str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert process.stdout is not None
+
+    captured_lines: list[str] = []
+    for line in process.stdout:
+        print(line, end="")
+        captured_lines.append(line)
+    return process.wait(), "".join(captured_lines)
+
+
+def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str) -> str:
+    if is_bilibili_url(task.url) and (
+        "HTTP Error 412" in output or "Request is blocked by server (412)" in output
+    ):
+        if not args.cookies_file and not args.cookies_browser:
+            return (
+                "Bilibili returned HTTP 412 (anti-bot). Open the same video in a normal "
+                "browser first, then rerun with --cookies-browser chrome/edge/firefox "
+                "or --cookies-file cookies.txt. If the IP is from a VPN or data center, "
+                "switch to a residential/home network or proxy."
+            )
+        return (
+            "Bilibili still returned HTTP 412. Refresh Bilibili in the same browser "
+            "to obtain fresh cookies, confirm the exact link opens normally in that "
+            "browser, then retry. If it still fails, the IP is likely being challenged; "
+            "switch to a residential/home network or proxy, and optionally try "
+            "--impersonate chrome after installing curl-cffi."
+        )
+
+    return "yt-dlp exited with a non-zero status after all retries."
 
 
 def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
@@ -513,10 +619,14 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
             attempt,
             max_attempts,
         )
-        process = subprocess.run(command, check=False)
-        if process.returncode == 0:
+        return_code, command_output = run_command_with_live_output(command)
+        if return_code == 0:
             final_file = find_existing_download(task.output_stem)
             return build_report_row(task, "downloaded", final_file, "")
+
+        failure_message = build_failure_message(task, args, command_output)
+        if failure_message != "yt-dlp exited with a non-zero status after all retries.":
+            logging.warning("Row %s hint: %s", task.row_number, failure_message)
 
         if attempt == max_attempts:
             break
@@ -527,7 +637,7 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
         logging.warning(
             "Row %s failed with exit code %s, retrying in %.1f seconds.",
             task.row_number,
-            process.returncode,
+            return_code,
             sleep_seconds,
         )
         time.sleep(sleep_seconds)
@@ -536,7 +646,7 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
         task,
         "failed",
         None,
-        "yt-dlp exited with a non-zero status after all retries.",
+        failure_message,
     )
 
 
