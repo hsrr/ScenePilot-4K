@@ -106,7 +106,7 @@ python3 video_batch_downloader.py \
 The script enables a conservative download profile by default:
 
 - single-fragment concurrency to reduce burst requests
-- randomized sleep between tasks and requests
+- randomized sleep between video tasks and individual requests
 - extractor retries plus task-level retries with exponential backoff
 - resume support via `--continue`
 - Bilibili-specific `Referer` / `Origin` headers
@@ -149,6 +149,37 @@ python3 video_batch_downloader.py \
   --output-root downloads \
   --cookies-browser chrome \
   --impersonate chrome
+```
+
+Why `yt-dlp` here instead of separate libraries?
+
+- `yt-dlp` is already a dedicated downloader for YouTube, Bilibili, and many other sites
+- YouTube-only libraries such as `pytube` break more often when YouTube changes
+- Bilibili-specific Python libraries are useful for metadata or account operations, but for bulk downloading across both platforms, `yt-dlp` is the most practical default
+- this script simply wraps `yt-dlp` with Excel parsing, folder naming, retries, cookies, and anti-bot precautions
+
+To make the crawl less bursty, the script now also sleeps a random amount before **every video row** by default:
+
+- `--task-sleep-min 5`
+- `--task-sleep-max 15`
+
+You can tune or disable it:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --task-sleep-min 8 \
+  --task-sleep-max 25
+```
+
+```bash
+# Disable per-video random waiting
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --task-sleep-min 0 \
+  --task-sleep-max 0
 ```
 
 Additional useful flags:

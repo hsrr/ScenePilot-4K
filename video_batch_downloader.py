@@ -192,7 +192,7 @@ def parse_args() -> argparse.Namespace:
         "--sleep-interval",
         type=float,
         default=2.0,
-        help="Base wait before each download, in seconds. Default: %(default)s",
+        help="Base wait between yt-dlp requests, in seconds. Default: %(default)s",
     )
     parser.add_argument(
         "--max-sleep-interval",
@@ -205,6 +205,24 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Wait between individual HTTP requests, in seconds. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--task-sleep-min",
+        type=float,
+        default=5.0,
+        help=(
+            "Random sleep lower bound before each video task, in seconds. "
+            "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--task-sleep-max",
+        type=float,
+        default=15.0,
+        help=(
+            "Random sleep upper bound before each video task, in seconds. "
+            "Default: %(default)s"
+        ),
     )
     parser.add_argument(
         "--task-retries",
@@ -578,6 +596,24 @@ def run_command_with_live_output(command: list[str]) -> tuple[int, str]:
     return process.wait(), "".join(captured_lines)
 
 
+def sleep_before_task(task: VideoTask, args: argparse.Namespace) -> None:
+    lower = max(0.0, min(args.task_sleep_min, args.task_sleep_max))
+    upper = max(0.0, max(args.task_sleep_min, args.task_sleep_max))
+    if upper <= 0:
+        return
+
+    wait_seconds = random.uniform(lower, upper)
+    logging.info(
+        "Random wait %.1f seconds before row %s (%s/%s/%s).",
+        wait_seconds,
+        task.row_number,
+        task.folder_name,
+        task.slice_name,
+        task.base_name,
+    )
+    time.sleep(wait_seconds)
+
+
 def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str) -> str:
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output
@@ -609,6 +645,8 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
 
     max_attempts = args.task_retries + 1
     for attempt in range(1, max_attempts + 1):
+        if attempt == 1:
+            sleep_before_task(task, args)
         command = build_yt_dlp_command(task, args)
         logging.info(
             "Downloading row %s -> %s/%s/%s (attempt %s/%s)",
