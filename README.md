@@ -141,6 +141,8 @@ For Bilibili specifically, `HTTP Error 412` usually means anti-bot blocking. In 
 3. if your current IP is a VPN / server / data-center exit, switch to a residential or home network
 4. optionally install `curl-cffi` and try `--impersonate chrome`
 
+The downloader treats Bilibili `HTTP 412` as a known anti-bot block and now stops retrying that row immediately, so one blocked link does not waste multiple retry cycles before moving on to the next row.
+
 Example:
 
 ```bash
@@ -197,7 +199,7 @@ python3 video_batch_downloader.py \
 
 Notes:
 
-- `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`.
+- `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.
 - `downloads/download_report.csv` records `downloaded`, `skipped_existing`, and `failed` rows.
 - Please make sure your downloads comply with the target platform's terms and the content owner's rights.
 

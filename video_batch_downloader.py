@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from shutil import which
 from typing import Any, Iterable
@@ -84,6 +85,7 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
+_FFMPEG_WARNING_EMITTED = False
 
 
 @dataclass
@@ -515,6 +517,19 @@ def build_site_headers(url: str) -> list[str]:
     return ["Accept-Language:zh-CN,zh;q=0.9,en;q=0.8"]
 
 
+@lru_cache(maxsize=1)
+def ffmpeg_available() -> bool:
+    return which("ffmpeg") is not None
+
+
+def warn_ffmpeg_missing_once() -> None:
+    global _FFMPEG_WARNING_EMITTED
+    if _FFMPEG_WARNING_EMITTED or ffmpeg_available():
+        return
+    logging.warning("ffmpeg not found, keeping the original container format.")
+    _FFMPEG_WARNING_EMITTED = True
+
+
 def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]:
     normalized_url = normalize_download_url(task.url)
     command = [
@@ -569,10 +584,10 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         if args.cookies_profile:
             browser_spec = f"{browser_spec}:{args.cookies_profile}"
         command.extend(["--cookies-from-browser", browser_spec])
-    if which("ffmpeg"):
+    if ffmpeg_available():
         command.extend(["--merge-output-format", args.merge_output_format])
     else:
-        logging.warning("ffmpeg not found, keeping the original container format.")
+        warn_ffmpeg_missing_once()
 
     command.append(normalized_url)
     return command
@@ -636,6 +651,14 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
     return "yt-dlp exited with a non-zero status after all retries."
 
 
+def is_retryable_failure(task: VideoTask, output: str) -> bool:
+    if is_bilibili_url(task.url) and (
+        "HTTP Error 412" in output or "Request is blocked by server (412)" in output
+    ):
+        return False
+    return True
+
+
 def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
     task.output_dir.mkdir(parents=True, exist_ok=True)
     existing = find_existing_download(task.output_stem)
@@ -665,6 +688,13 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
         failure_message = build_failure_message(task, args, command_output)
         if failure_message != "yt-dlp exited with a non-zero status after all retries.":
             logging.warning("Row %s hint: %s", task.row_number, failure_message)
+
+        if not is_retryable_failure(task, command_output):
+            logging.warning(
+                "Row %s hit a known non-retryable anti-bot block; skipping remaining retries.",
+                task.row_number,
+            )
+            break
 
         if attempt == max_attempts:
             break
