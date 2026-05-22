@@ -236,6 +236,18 @@ python3 video_batch_downloader.py \
   --proxy socks5://127.0.0.1:7890
 ```
 
+For YouTube, some videos do not expose the exact `bestvideo+bestaudio` combination you requested. The downloader now supports an automatic fallback format:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --format "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+  --youtube-format-fallback "best"
+```
+
+If the primary YouTube format is unavailable, the downloader will immediately retry with the fallback format instead of wasting a full task retry.
+
 If your sheet mixes Bilibili and YouTube links, you can keep Bilibili on the direct connection while routing only YouTube through a local proxy:
 
 ```bash

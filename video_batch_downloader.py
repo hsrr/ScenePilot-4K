@@ -156,6 +156,14 @@ def parse_args() -> argparse.Namespace:
         help="yt-dlp format selector. Default: %(default)s",
     )
     parser.add_argument(
+        "--youtube-format-fallback",
+        default="best",
+        help=(
+            "Fallback format used for YouTube when the primary format is unavailable. "
+            "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
         "--merge-output-format",
         default="mp4",
         help="Merged output format when ffmpeg is available. Default: %(default)s",
@@ -618,10 +626,27 @@ def warn_ffmpeg_missing_once() -> None:
     _FFMPEG_WARNING_EMITTED = True
 
 
-def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]:
+def build_format_candidates(task: VideoTask, args: argparse.Namespace) -> list[str]:
+    candidates = [args.format]
+    if is_youtube_url(task.url) and args.youtube_format_fallback:
+        candidates.append(args.youtube_format_fallback)
+
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def build_yt_dlp_command(
+    task: VideoTask,
+    args: argparse.Namespace,
+    format_selector: str | None = None,
+) -> list[str]:
     normalized_url = normalize_download_url(task.url)
     task_proxy = resolve_proxy_for_task(task, args)
     task_cookies_file = resolve_cookies_file_for_task(task, args)
+    active_format = format_selector or args.format
     command = [
         sys.executable,
         "-m",
@@ -646,7 +671,7 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         "--user-agent",
         args.user_agent,
         "--format",
-        args.format,
+        active_format,
         "--output",
         str(task.output_dir / f"{task.base_name}.%(ext)s"),
     ]
@@ -720,6 +745,10 @@ def sleep_before_task(task: VideoTask, args: argparse.Namespace) -> None:
     time.sleep(wait_seconds)
 
 
+def format_unavailable(output: str) -> bool:
+    return "Requested format is not available" in output
+
+
 def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str) -> str:
     if "Could not copy Chrome cookie database" in output:
         return (
@@ -734,6 +763,13 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
             "YouTube requested login verification. Export a YouTube account cookies.txt "
             "from youtube.com and pass it with --youtube-cookies-file. Reusing a "
             "Bilibili cookies file will not help for YouTube."
+        )
+
+    if is_youtube_url(task.url) and format_unavailable(output):
+        return (
+            "The requested YouTube format was unavailable for this video. The downloader "
+            "can retry with --youtube-format-fallback, or you can choose a more permissive "
+            "main format selector."
         )
 
     if is_bilibili_url(task.url) and (
@@ -762,6 +798,8 @@ def is_retryable_failure(task: VideoTask, output: str) -> bool:
         return False
     if is_youtube_url(task.url) and "Sign in to confirm you're not a bot" in output:
         return False
+    if is_youtube_url(task.url) and format_unavailable(output):
+        return False
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output
     ):
@@ -780,7 +818,6 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
     for attempt in range(1, max_attempts + 1):
         if attempt == 1:
             sleep_before_task(task, args)
-        command = build_yt_dlp_command(task, args)
         active_proxy = resolve_proxy_for_task(task, args)
         if active_proxy:
             logging.info(
@@ -793,19 +830,48 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
                 "Row %s uses direct connection for Bilibili.",
                 task.row_number,
             )
-        logging.info(
-            "Downloading row %s -> %s/%s/%s (attempt %s/%s)",
-            task.row_number,
-            task.folder_name,
-            task.slice_name,
-            task.base_name,
-            attempt,
-            max_attempts,
-        )
-        return_code, command_output = run_command_with_live_output(command)
-        if return_code == 0:
-            final_file = find_existing_download(task.output_stem)
-            return build_report_row(task, "downloaded", final_file, "")
+        format_candidates = build_format_candidates(task, args)
+        failure_message = "yt-dlp exited with a non-zero status after all retries."
+        command_output = ""
+        return_code = 1
+        for format_index, format_candidate in enumerate(format_candidates, start=1):
+            if len(format_candidates) > 1:
+                logging.info(
+                    "Row %s using format candidate %s/%s: %s",
+                    task.row_number,
+                    format_index,
+                    len(format_candidates),
+                    format_candidate,
+                )
+            logging.info(
+                "Downloading row %s -> %s/%s/%s (attempt %s/%s)",
+                task.row_number,
+                task.folder_name,
+                task.slice_name,
+                task.base_name,
+                attempt,
+                max_attempts,
+            )
+            command = build_yt_dlp_command(task, args, format_selector=format_candidate)
+            return_code, command_output = run_command_with_live_output(command)
+            if return_code == 0:
+                final_file = find_existing_download(task.output_stem)
+                return build_report_row(task, "downloaded", final_file, "")
+
+            if (
+                is_youtube_url(task.url)
+                and format_unavailable(command_output)
+                and format_index < len(format_candidates)
+            ):
+                logging.warning(
+                    "Row %s format '%s' unavailable, trying fallback format '%s'.",
+                    task.row_number,
+                    format_candidate,
+                    format_candidates[format_index],
+                )
+                continue
+
+            break
 
         failure_message = build_failure_message(task, args, command_output)
         if failure_message != "yt-dlp exited with a non-zero status after all retries.":
