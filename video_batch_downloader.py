@@ -166,6 +166,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to an exported Netscape cookies.txt file.",
     )
     parser.add_argument(
+        "--youtube-cookies-file",
+        default=None,
+        help="Optional cookies.txt file used only for YouTube URLs.",
+    )
+    parser.add_argument(
+        "--bilibili-cookies-file",
+        default=None,
+        help="Optional cookies.txt file used only for Bilibili URLs.",
+    )
+    parser.add_argument(
         "--cookies-browser",
         default=None,
         help="Browser name for --cookies-from-browser, e.g. chrome/firefox/edge.",
@@ -587,6 +597,14 @@ def resolve_proxy_for_task(task: VideoTask, args: argparse.Namespace) -> str | N
     return args.proxy
 
 
+def resolve_cookies_file_for_task(task: VideoTask, args: argparse.Namespace) -> str | None:
+    if is_youtube_url(task.url) and args.youtube_cookies_file:
+        return args.youtube_cookies_file
+    if is_bilibili_url(task.url) and args.bilibili_cookies_file:
+        return args.bilibili_cookies_file
+    return args.cookies_file
+
+
 @lru_cache(maxsize=1)
 def ffmpeg_available() -> bool:
     return which("ffmpeg") is not None
@@ -603,6 +621,7 @@ def warn_ffmpeg_missing_once() -> None:
 def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]:
     normalized_url = normalize_download_url(task.url)
     task_proxy = resolve_proxy_for_task(task, args)
+    task_cookies_file = resolve_cookies_file_for_task(task, args)
     command = [
         sys.executable,
         "-m",
@@ -648,8 +667,8 @@ def build_yt_dlp_command(task: VideoTask, args: argparse.Namespace) -> list[str]
         command.extend(["--proxy", task_proxy])
     if args.impersonate:
         command.extend(["--impersonate", args.impersonate])
-    if args.cookies_file:
-        command.extend(["--cookies", args.cookies_file])
+    if task_cookies_file:
+        command.extend(["--cookies", task_cookies_file])
     elif args.cookies_browser:
         browser_spec = args.cookies_browser
         if args.cookies_profile:
@@ -710,10 +729,17 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
             "cookies.txt and use --cookies-file instead."
         )
 
+    if is_youtube_url(task.url) and "Sign in to confirm you're not a bot" in output:
+        return (
+            "YouTube requested login verification. Export a YouTube account cookies.txt "
+            "from youtube.com and pass it with --youtube-cookies-file. Reusing a "
+            "Bilibili cookies file will not help for YouTube."
+        )
+
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output
     ):
-        if not args.cookies_file and not args.cookies_browser:
+        if not resolve_cookies_file_for_task(task, args) and not args.cookies_browser:
             return (
                 "Bilibili returned HTTP 412 (anti-bot). Open the same video in a normal "
                 "browser first, then rerun with --cookies-browser chrome/edge/firefox "
@@ -733,6 +759,8 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
 
 def is_retryable_failure(task: VideoTask, output: str) -> bool:
     if "Could not copy Chrome cookie database" in output:
+        return False
+    if is_youtube_url(task.url) and "Sign in to confirm you're not a bot" in output:
         return False
     if is_bilibili_url(task.url) and (
         "HTTP Error 412" in output or "Request is blocked by server (412)" in output

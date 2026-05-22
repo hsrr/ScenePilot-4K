@@ -135,6 +135,18 @@ python3 video_batch_downloader.py \
   --cookies-browser chrome
 ```
 
+If you mix Bilibili and YouTube in the same manifest, you can also pass separate cookies files per platform:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --bilibili-cookies-file /path/to/bilibili-cookies.txt \
+  --youtube-cookies-file /path/to/youtube-cookies.txt
+```
+
+This is useful because a Bilibili cookies file does not help with YouTube's `Sign in to confirm you're not a bot` checks, and a YouTube cookies file does not replace Bilibili login state.
+
 On Windows, `--cookies-browser chrome` can fail with `Could not copy Chrome cookie database` if Chrome/Edge is still running and the cookies DB is locked. The quickest fixes are:
 
 1. fully close the browser first, including background processes in Task Manager
@@ -149,6 +161,8 @@ For Bilibili specifically, `HTTP Error 412` usually means anti-bot blocking. In 
 4. optionally install `curl-cffi` and try `--impersonate chrome`
 
 The downloader treats Bilibili `HTTP 412` as a known anti-bot block and now stops retrying that row immediately, so one blocked link does not waste multiple retry cycles before moving on to the next row.
+
+For YouTube specifically, `Sign in to confirm you're not a bot` means you should export a YouTube account cookies.txt from `youtube.com` and pass it with `--youtube-cookies-file`. The downloader treats this as a known non-retryable failure and moves on instead of wasting retries.
 
 Example:
 
