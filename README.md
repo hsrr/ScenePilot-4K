@@ -277,6 +277,7 @@ When `--youtube-proxy` or `--youtube-proxy-port` is set, the script logs that Yo
 Notes:
 
 - `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.
+- if a target folder only has empty files or `.part/.ytdl/.temp` artifacts, the downloader treats it as incomplete and retries instead of skipping it as finished.
 - `downloads/download_report.csv` records `downloaded`, `skipped_existing`, and `failed` rows.
 - Please make sure your downloads comply with the target platform's terms and the content owner's rights.
 

@@ -532,11 +532,39 @@ def build_tasks(frame: pd.DataFrame, args: argparse.Namespace, output_root: Path
 
 
 def find_existing_download(output_stem: Path) -> Path | None:
+    temp_candidates: list[Path] = []
+    valid_candidates: list[Path] = []
+    zero_byte_candidates: list[Path] = []
+
     for candidate in sorted(output_stem.parent.glob(f"{output_stem.name}.*")):
-        if candidate.suffix.lower() in TEMP_FILE_SUFFIXES:
+        if not candidate.is_file():
             continue
-        if candidate.is_file():
-            return candidate
+        if candidate.suffix.lower() in TEMP_FILE_SUFFIXES:
+            temp_candidates.append(candidate)
+            continue
+        if candidate.stat().st_size <= 0:
+            zero_byte_candidates.append(candidate)
+            continue
+        valid_candidates.append(candidate)
+
+    if temp_candidates:
+        logging.info(
+            "Detected unfinished download artifacts for %s: %s",
+            output_stem.name,
+            ", ".join(str(path.name) for path in temp_candidates),
+        )
+        return None
+
+    if zero_byte_candidates:
+        logging.warning(
+            "Ignoring zero-byte output files for %s: %s",
+            output_stem.name,
+            ", ".join(str(path.name) for path in zero_byte_candidates),
+        )
+        return None
+
+    if valid_candidates:
+        return valid_candidates[0]
     return None
 
 
