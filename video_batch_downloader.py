@@ -105,6 +105,13 @@ class VideoTask:
         return self.output_dir / self.base_name
 
 
+@dataclass
+class OutputInspection:
+    valid_file: Path | None
+    temp_files: list[Path]
+    zero_byte_files: list[Path]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Read an Excel/CSV manifest and download videos with yt-dlp.",
@@ -114,6 +121,22 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         default="downloads",
         help="Root output directory. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--existing-output-root",
+        default=None,
+        help=(
+            "Optional old output root to treat as already-downloaded reference files. "
+            "Useful when moving unfinished work to another disk."
+        ),
+    )
+    parser.add_argument(
+        "--delete-incomplete-from-existing",
+        action="store_true",
+        help=(
+            "Delete temp files, zero-byte files, and empty task folders from "
+            "--existing-output-root before re-downloading missing items to --output-root."
+        ),
     )
     parser.add_argument(
         "--sheet",
@@ -531,7 +554,11 @@ def build_tasks(frame: pd.DataFrame, args: argparse.Namespace, output_root: Path
     return tasks
 
 
-def find_existing_download(output_stem: Path) -> Path | None:
+def task_output_stem_for_root(task: VideoTask, root: Path) -> Path:
+    return root / task.folder_name / task.slice_name / task.base_name
+
+
+def inspect_output_stem(output_stem: Path) -> OutputInspection:
     temp_candidates: list[Path] = []
     valid_candidates: list[Path] = []
     zero_byte_candidates: list[Path] = []
@@ -547,25 +574,59 @@ def find_existing_download(output_stem: Path) -> Path | None:
             continue
         valid_candidates.append(candidate)
 
-    if temp_candidates:
+    return OutputInspection(
+        valid_file=valid_candidates[0] if valid_candidates else None,
+        temp_files=temp_candidates,
+        zero_byte_files=zero_byte_candidates,
+    )
+
+
+def log_incomplete_artifacts(output_stem: Path, inspection: OutputInspection) -> None:
+    if inspection.temp_files:
         logging.info(
             "Detected unfinished download artifacts for %s: %s",
             output_stem.name,
-            ", ".join(str(path.name) for path in temp_candidates),
+            ", ".join(str(path.name) for path in inspection.temp_files),
         )
-        return None
 
-    if zero_byte_candidates:
+    if inspection.zero_byte_files:
         logging.warning(
             "Ignoring zero-byte output files for %s: %s",
             output_stem.name,
-            ", ".join(str(path.name) for path in zero_byte_candidates),
+            ", ".join(str(path.name) for path in inspection.zero_byte_files),
         )
-        return None
 
-    if valid_candidates:
-        return valid_candidates[0]
-    return None
+
+
+def find_existing_download(output_stem: Path) -> Path | None:
+    inspection = inspect_output_stem(output_stem)
+    log_incomplete_artifacts(output_stem, inspection)
+    return inspection.valid_file
+
+
+def remove_empty_parents(path: Path, stop_at: Path) -> None:
+    stop_at = stop_at.resolve()
+    current = path.resolve()
+    while current != stop_at:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def cleanup_incomplete_outputs(output_stem: Path, root_to_prune: Path) -> list[Path]:
+    inspection = inspect_output_stem(output_stem)
+    deleted_paths: list[Path] = []
+
+    for path in inspection.temp_files + inspection.zero_byte_files:
+        path.unlink(missing_ok=True)
+        deleted_paths.append(path)
+
+    if output_stem.parent.exists():
+        remove_empty_parents(output_stem.parent, root_to_prune)
+
+    return deleted_paths
 
 
 def is_bilibili_url(url: str) -> bool:
@@ -842,6 +903,27 @@ def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
         logging.info("Skip existing file for row %s: %s", task.row_number, existing)
         return build_report_row(task, "skipped_existing", existing, "")
 
+    existing_root = Path(args.existing_output_root) if args.existing_output_root else None
+    if existing_root is not None:
+        old_output_stem = task_output_stem_for_root(task, existing_root)
+        old_existing = find_existing_download(old_output_stem)
+        if old_existing:
+            logging.info(
+                "Skip existing file for row %s from old output root: %s",
+                task.row_number,
+                old_existing,
+            )
+            return build_report_row(task, "skipped_existing", old_existing, "")
+
+        if args.delete_incomplete_from_existing:
+            deleted_paths = cleanup_incomplete_outputs(old_output_stem, existing_root)
+            if deleted_paths:
+                logging.info(
+                    "Deleted incomplete artifacts for row %s from old output root: %s",
+                    task.row_number,
+                    ", ".join(str(path.name) for path in deleted_paths),
+                )
+
     max_attempts = args.task_retries + 1
     for attempt in range(1, max_attempts + 1):
         if attempt == 1:
@@ -1025,6 +1107,10 @@ def main() -> int:
 
     input_path = Path(args.input).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
+    if args.existing_output_root:
+        args.existing_output_root = str(
+            Path(args.existing_output_root).expanduser().resolve()
+        )
     report_path = (
         Path(args.report_file).expanduser().resolve()
         if args.report_file

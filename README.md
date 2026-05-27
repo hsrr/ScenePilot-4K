@@ -274,6 +274,16 @@ This is useful when:
 
 When `--youtube-proxy` or `--youtube-proxy-port` is set, the script logs that YouTube rows use the proxy while Bilibili rows stay direct.
 
+If your old download disk is full and you want to continue on a new disk, you can point the downloader at the old output root as a reference. Completed files in the old root are treated as already done, while incomplete temp files and empty task folders can be deleted before missing items are downloaded to the new root:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /new-disk/downloads \
+  --existing-output-root /old-disk/downloads \
+  --delete-incomplete-from-existing
+```
+
 Notes:
 
 - `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.
