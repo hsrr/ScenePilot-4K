@@ -83,6 +83,8 @@ MEDIA_SUFFIXES = {
     ".m4v",
     ".ts",
 }
+VIDEO_FILE_SUFFIXES = {".mp4", ".mkv", ".mov", ".flv", ".avi", ".webm", ".m4v", ".ts"}
+PURE_AUDIO_SUFFIXES = {".m4a", ".mp3", ".aac", ".wav", ".ogg", ".opus", ".flac"}
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
@@ -107,7 +109,8 @@ class VideoTask:
 
 @dataclass
 class OutputInspection:
-    valid_file: Path | None
+    valid_video_file: Path | None
+    audio_only_files: list[Path]
     temp_files: list[Path]
     zero_byte_files: list[Path]
 
@@ -568,7 +571,8 @@ def task_output_stem_for_root(task: VideoTask, root: Path) -> Path:
 
 def inspect_output_stem(output_stem: Path) -> OutputInspection:
     temp_candidates: list[Path] = []
-    valid_candidates: list[Path] = []
+    valid_video_candidates: list[Path] = []
+    audio_only_candidates: list[Path] = []
     zero_byte_candidates: list[Path] = []
 
     for candidate in sorted(output_stem.parent.glob(f"{output_stem.name}.*")):
@@ -580,10 +584,17 @@ def inspect_output_stem(output_stem: Path) -> OutputInspection:
         if candidate.stat().st_size <= 0:
             zero_byte_candidates.append(candidate)
             continue
-        valid_candidates.append(candidate)
+        if candidate.suffix.lower() in PURE_AUDIO_SUFFIXES:
+            audio_only_candidates.append(candidate)
+            continue
+        if candidate.suffix.lower() in VIDEO_FILE_SUFFIXES:
+            valid_video_candidates.append(candidate)
+            continue
+        valid_video_candidates.append(candidate)
 
     return OutputInspection(
-        valid_file=valid_candidates[0] if valid_candidates else None,
+        valid_video_file=valid_video_candidates[0] if valid_video_candidates else None,
+        audio_only_files=audio_only_candidates,
         temp_files=temp_candidates,
         zero_byte_files=zero_byte_candidates,
     )
@@ -595,6 +606,13 @@ def log_incomplete_artifacts(output_stem: Path, inspection: OutputInspection) ->
             "Detected unfinished download artifacts for %s: %s",
             output_stem.name,
             ", ".join(str(path.name) for path in inspection.temp_files),
+        )
+
+    if inspection.audio_only_files:
+        logging.info(
+            "Ignoring audio-only outputs for %s: %s",
+            output_stem.name,
+            ", ".join(str(path.name) for path in inspection.audio_only_files),
         )
 
     if inspection.zero_byte_files:
@@ -609,7 +627,7 @@ def log_incomplete_artifacts(output_stem: Path, inspection: OutputInspection) ->
 def find_existing_download(output_stem: Path) -> Path | None:
     inspection = inspect_output_stem(output_stem)
     log_incomplete_artifacts(output_stem, inspection)
-    return inspection.valid_file
+    return inspection.valid_video_file
 
 
 def remove_empty_parents(path: Path, stop_at: Path) -> None:
