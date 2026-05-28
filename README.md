@@ -284,6 +284,26 @@ python3 video_batch_downloader.py \
   --delete-incomplete-from-existing
 ```
 
+If you want to keep working in the same output folder instead of moving to a new disk:
+
+- default behavior: completed files are skipped, `.part/.ytdl/.temp` leftovers are resumed in place
+- optional cleanup behavior: add `--delete-incomplete-in-output-root` to delete incomplete leftovers in the current output folder first, then redownload them
+
+```bash
+# Continue unfinished downloads in place
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /same-disk/downloads
+```
+
+```bash
+# Redownload incomplete leftovers in place
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /same-disk/downloads \
+  --delete-incomplete-in-output-root
+```
+
 Notes:
 
 - `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.

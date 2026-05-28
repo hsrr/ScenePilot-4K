@@ -123,6 +123,14 @@ def parse_args() -> argparse.Namespace:
         help="Root output directory. Default: %(default)s",
     )
     parser.add_argument(
+        "--delete-incomplete-in-output-root",
+        action="store_true",
+        help=(
+            "Delete temp files, zero-byte files, and empty task folders from "
+            "--output-root before retrying incomplete tasks in place."
+        ),
+    )
+    parser.add_argument(
         "--existing-output-root",
         default=None,
         help=(
@@ -903,6 +911,14 @@ def is_retryable_failure(task: VideoTask, output: str) -> bool:
 
 def download_task(task: VideoTask, args: argparse.Namespace) -> dict[str, Any]:
     task.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.delete_incomplete_in_output_root:
+        deleted_paths = cleanup_incomplete_outputs(task.output_stem, Path(args.output_root))
+        if deleted_paths:
+            logging.info(
+                "Deleted incomplete artifacts for row %s from current output root: %s",
+                task.row_number,
+                ", ".join(str(path.name) for path in deleted_paths),
+            )
     existing = find_existing_download(task.output_stem)
     if existing:
         logging.info("Skip existing file for row %s: %s", task.row_number, existing)
@@ -1112,6 +1128,7 @@ def main() -> int:
 
     input_path = Path(args.input).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
+    args.output_root = str(output_root)
     if args.existing_output_root:
         args.existing_output_root = str(
             Path(args.existing_output_root).expanduser().resolve()
