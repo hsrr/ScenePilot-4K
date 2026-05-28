@@ -838,6 +838,11 @@ def format_unavailable(output: str) -> bool:
     return "Requested format is not available" in output
 
 
+def youtube_bot_verification_required(output: str) -> bool:
+    lowered = output.lower()
+    return "sign in to confirm" in lowered and "not a bot" in lowered
+
+
 def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str) -> str:
     if "Could not copy Chrome cookie database" in output:
         return (
@@ -847,7 +852,7 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
             "cookies.txt and use --cookies-file instead."
         )
 
-    if is_youtube_url(task.url) and "Sign in to confirm you're not a bot" in output:
+    if is_youtube_url(task.url) and youtube_bot_verification_required(output):
         return (
             "YouTube requested login verification. Export a YouTube account cookies.txt "
             "from youtube.com and pass it with --youtube-cookies-file. Reusing a "
@@ -885,7 +890,7 @@ def build_failure_message(task: VideoTask, args: argparse.Namespace, output: str
 def is_retryable_failure(task: VideoTask, output: str) -> bool:
     if "Could not copy Chrome cookie database" in output:
         return False
-    if is_youtube_url(task.url) and "Sign in to confirm you're not a bot" in output:
+    if is_youtube_url(task.url) and youtube_bot_verification_required(output):
         return False
     if is_youtube_url(task.url) and format_unavailable(output):
         return False
