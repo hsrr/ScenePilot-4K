@@ -85,6 +85,23 @@ MEDIA_SUFFIXES = {
 }
 VIDEO_FILE_SUFFIXES = {".mp4", ".mkv", ".mov", ".flv", ".avi", ".webm", ".m4v", ".ts"}
 PURE_AUDIO_SUFFIXES = {".m4a", ".mp3", ".aac", ".wav", ".ogg", ".opus", ".flac"}
+YOUTUBE_AUDIO_ONLY_FORMAT_IDS = {
+    "139",
+    "140",
+    "141",
+    "171",
+    "233",
+    "234",
+    "249",
+    "250",
+    "251",
+    "258",
+    "325",
+    "328",
+    "338",
+    "599",
+    "600",
+}
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
@@ -584,7 +601,7 @@ def inspect_output_stem(output_stem: Path) -> OutputInspection:
         if candidate.stat().st_size <= 0:
             zero_byte_candidates.append(candidate)
             continue
-        if candidate.suffix.lower() in PURE_AUDIO_SUFFIXES:
+        if is_audio_only_file(candidate):
             audio_only_candidates.append(candidate)
             continue
         if candidate.suffix.lower() in VIDEO_FILE_SUFFIXES:
@@ -729,6 +746,11 @@ def resolve_cookies_file_for_task(task: VideoTask, args: argparse.Namespace) -> 
 
 
 @lru_cache(maxsize=1)
+def ffprobe_available() -> bool:
+    return which("ffprobe") is not None
+
+
+@lru_cache(maxsize=1)
 def ffmpeg_available() -> bool:
     return which("ffmpeg") is not None
 
@@ -739,6 +761,55 @@ def warn_ffmpeg_missing_once() -> None:
         return
     logging.warning("ffmpeg not found, keeping the original container format.")
     _FFMPEG_WARNING_EMITTED = True
+
+
+def youtube_format_id_from_name(path: Path) -> str | None:
+    match = re.search(r"\.f(\d+)\.", path.name)
+    return match.group(1) if match else None
+
+
+def file_contains_video_stream(path: Path) -> bool | None:
+    if not ffprobe_available():
+        return None
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return None
+    return "video" in result.stdout.lower()
+
+
+def is_audio_only_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in PURE_AUDIO_SUFFIXES:
+        return True
+
+    stream_has_video = file_contains_video_stream(path)
+    if stream_has_video is not None:
+        return not stream_has_video
+
+    format_id = youtube_format_id_from_name(path)
+    if format_id and format_id in YOUTUBE_AUDIO_ONLY_FORMAT_IDS:
+        return True
+
+    return False
 
 
 def build_format_candidates(task: VideoTask, args: argparse.Namespace) -> list[str]:
