@@ -662,7 +662,11 @@ def cleanup_incomplete_outputs(output_stem: Path, root_to_prune: Path) -> list[P
     inspection = inspect_output_stem(output_stem)
     deleted_paths: list[Path] = []
 
-    for path in inspection.temp_files + inspection.zero_byte_files:
+    for path in (
+        inspection.temp_files
+        + inspection.zero_byte_files
+        + inspection.audio_only_files
+    ):
         path.unlink(missing_ok=True)
         deleted_paths.append(path)
 

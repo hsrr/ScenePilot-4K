@@ -309,6 +309,7 @@ Notes:
 - `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.
 - if a target folder only has empty files or `.part/.ytdl/.temp` artifacts, the downloader treats it as incomplete and retries instead of skipping it as finished.
 - audio-only leftovers such as `.m4a/.mp3/.opus` do not count as a completed download; the downloader will still fetch the corresponding video file unless a complete video file already exists.
+- when `--delete-incomplete-in-output-root` is enabled, stray audio-only files are also deleted before retrying: if a matching video file already exists it is kept, otherwise the task is re-downloaded.
 - `downloads/download_report.csv` records `downloaded`, `skipped_existing`, and `failed` rows.
 - Please make sure your downloads comply with the target platform's terms and the content owner's rights.
 
