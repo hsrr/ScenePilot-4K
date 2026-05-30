@@ -36,6 +36,283 @@ conda activate scenepilot
 pip install -r requirements.txt
 ```
 
+## Batch video downloader from Excel
+
+The repository now includes `video_batch_downloader.py`, a standalone script for reading an Excel/CSV file and downloading video links from platforms such as YouTube and Bilibili with `yt-dlp`.
+
+### Supported manifest columns
+
+The script auto-detects these logical columns and also supports the Chinese aliases below:
+
+- first-level folder: `folder_name` / `文件夹名称`
+- slice folder: `slice_name` / `切片文件夹`
+- video url: `video_url` / `视频链接`
+- sequence or name (optional): `序号`
+
+Example table:
+
+| 文件夹名称 | 切片文件夹 | 序号 | 视频链接 |
+| --- | --- | --- | --- |
+| 城市场景 | 路口 | 01 | https://www.youtube.com/watch?v=... |
+| 城市场景 | 路口 | 02 | https://www.bilibili.com/video/BV... |
+| 高速场景 | 夜间 | 01 | https://www.youtube.com/watch?v=... |
+
+The output structure is:
+
+```text
+downloads/
+  城市场景/
+    路口/
+      01.mp4
+      02.mp4
+  高速场景/
+    夜间/
+      01.mp4
+```
+
+### Dry run first
+
+Use `--plan-only` first to verify the parsed rows and output paths without downloading:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --plan-only
+```
+
+### Start the download
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads
+```
+
+If your sheet uses custom headers, pass them explicitly:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --folder-column "一级目录" \
+  --slice-column "切片目录" \
+  --name-column "编号" \
+  --url-column "链接"
+```
+
+### Stability and anti-bot precautions
+
+The script enables a conservative download profile by default:
+
+- single-fragment concurrency to reduce burst requests
+- randomized sleep between video tasks and individual requests
+- extractor retries plus task-level retries with exponential backoff
+- resume support via `--continue`
+- Bilibili-specific `Referer` / `Origin` headers
+- automatic cleanup of Bilibili share tracking query parameters
+- optional rate limiting via `--limit-rate`
+- optional proxy via `--proxy`
+- optional YouTube-only proxy routing via `--youtube-proxy` or `--youtube-proxy-port`
+- optional browser impersonation via `--impersonate`
+- CSV report generation for retrying failed rows later
+
+For YouTube/Bilibili, authenticated cookies usually improve stability for rate-limited or age-gated content:
+
+```bash
+# Use exported cookies.txt
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-file /path/to/cookies.txt
+```
+
+```bash
+# Or read cookies from a local browser profile
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-browser chrome
+```
+
+If you mix Bilibili and YouTube in the same manifest, you can also pass separate cookies files per platform:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --bilibili-cookies-file /path/to/bilibili-cookies.txt \
+  --youtube-cookies-file /path/to/youtube-cookies.txt
+```
+
+This is useful because a Bilibili cookies file does not help with YouTube's `Sign in to confirm you're not a bot` checks, and a YouTube cookies file does not replace Bilibili login state.
+
+On Windows, `--cookies-browser chrome` can fail with `Could not copy Chrome cookie database` if Chrome/Edge is still running and the cookies DB is locked. The quickest fixes are:
+
+1. fully close the browser first, including background processes in Task Manager
+2. rerun the downloader
+3. if you do not want to close the browser, export `cookies.txt` manually and use `--cookies-file`
+
+For Bilibili specifically, `HTTP Error 412` usually means anti-bot blocking. In practice, the most effective order is:
+
+1. open the exact Bilibili video in a normal browser first
+2. rerun with `--cookies-browser chrome` (or `edge` / `firefox`)
+3. if your current IP is a VPN / server / data-center exit, switch to a residential or home network
+4. optionally install `curl-cffi` and try `--impersonate chrome`
+
+The downloader treats Bilibili `HTTP 412` as a known anti-bot block and now stops retrying that row immediately, so one blocked link does not waste multiple retry cycles before moving on to the next row.
+
+For YouTube specifically, `Sign in to confirm you're not a bot` means you should export a YouTube account cookies.txt from `youtube.com` and pass it with `--youtube-cookies-file`. The downloader treats this as a known non-retryable failure and moves on instead of wasting retries.
+
+Example:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --cookies-browser chrome \
+  --impersonate chrome
+```
+
+Why `yt-dlp` here instead of separate libraries?
+
+- `yt-dlp` is already a dedicated downloader for YouTube, Bilibili, and many other sites
+- YouTube-only libraries such as `pytube` break more often when YouTube changes
+- Bilibili-specific Python libraries are useful for metadata or account operations, but for bulk downloading across both platforms, `yt-dlp` is the most practical default
+- this script simply wraps `yt-dlp` with Excel parsing, folder naming, retries, cookies, and anti-bot precautions
+
+To make the crawl less bursty, the script now also sleeps a random amount before **every video row** by default:
+
+- `--task-sleep-min 1`
+- `--task-sleep-max 3`
+
+The downloader also supports controlled parallelism:
+
+- `--workers 3` total workers by default
+- `--youtube-workers 3` so YouTube can run in parallel
+- `--bilibili-workers 1` so Bilibili stays conservative and is less likely to trigger anti-bot blocks
+
+You can tune or disable it:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --task-sleep-min 8 \
+  --task-sleep-max 25
+```
+
+```bash
+# Disable per-video random waiting
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --task-sleep-min 0 \
+  --task-sleep-max 0
+```
+
+```bash
+# Faster mixed-platform run: parallel YouTube, conservative Bilibili
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --workers 4 \
+  --youtube-workers 4 \
+  --bilibili-workers 1 \
+  --task-sleep-min 1 \
+  --task-sleep-max 3
+```
+
+Additional useful flags:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --limit-rate 2M \
+  --sleep-interval 3 \
+  --max-sleep-interval 8 \
+  --sleep-requests 1.5 \
+  --proxy socks5://127.0.0.1:7890
+```
+
+For YouTube, some videos do not expose the exact `bestvideo+bestaudio` combination you requested. The downloader now supports an automatic fallback format:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --format "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+  --youtube-format-fallback "best"
+```
+
+If the primary YouTube format is unavailable, the downloader will immediately retry with the fallback format instead of wasting a full task retry.
+
+If your sheet mixes Bilibili and YouTube links, you can keep Bilibili on the direct connection while routing only YouTube through a local proxy:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --youtube-proxy http://127.0.0.1:7897
+```
+
+Or just provide the local port:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root downloads \
+  --youtube-proxy-port 7897
+```
+
+This is useful when:
+
+- Bilibili works better without VPN / proxy
+- YouTube requires a proxy in your network
+- you want one mixed Excel file to run in a single pass
+
+When `--youtube-proxy` or `--youtube-proxy-port` is set, the script logs that YouTube rows use the proxy while Bilibili rows stay direct.
+
+If your old download disk is full and you want to continue on a new disk, you can point the downloader at the old output root as a reference. Completed files in the old root are treated as already done, while incomplete temp files and empty task folders can be deleted before missing items are downloaded to the new root:
+
+```bash
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /new-disk/downloads \
+  --existing-output-root /old-disk/downloads \
+  --delete-incomplete-from-existing
+```
+
+If you want to keep working in the same output folder instead of moving to a new disk:
+
+- default behavior: completed files are skipped, `.part/.ytdl/.temp` leftovers are resumed in place
+- optional cleanup behavior: add `--delete-incomplete-in-output-root` to delete incomplete leftovers in the current output folder first, then redownload them
+
+```bash
+# Continue unfinished downloads in place
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /same-disk/downloads
+```
+
+```bash
+# Redownload incomplete leftovers in place
+python3 video_batch_downloader.py \
+  --input manifest.xlsx \
+  --output-root /same-disk/downloads \
+  --delete-incomplete-in-output-root
+```
+
+Notes:
+
+- `ffmpeg` is recommended so separate audio/video streams can be merged into `.mp4`. If it is missing, the script logs the warning once and keeps the original container format.
+- if a target folder only has empty files or `.part/.ytdl/.temp` artifacts, the downloader treats it as incomplete and retries instead of skipping it as finished.
+- audio-only leftovers such as `.m4a/.mp3/.opus` do not count as a completed download; the downloader will still fetch the corresponding video file unless a complete video file already exists.
+- when `--delete-incomplete-in-output-root` is enabled, stray audio-only files are also deleted before retrying: if a matching video file already exists it is kept, otherwise the task is re-downloaded.
+- `downloads/download_report.csv` records `downloaded`, `skipped_existing`, and `failed` rows.
+- Please make sure your downloads comply with the target platform's terms and the content owner's rights.
+
 # 🚀 Inference
 
 ```bash
