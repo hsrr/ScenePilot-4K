@@ -128,6 +128,7 @@ class VideoTask:
 class OutputInspection:
     valid_video_file: Path | None
     audio_only_files: list[Path]
+    orphan_stream_files: list[Path]
     temp_files: list[Path]
     zero_byte_files: list[Path]
 
@@ -590,6 +591,8 @@ def inspect_output_stem(output_stem: Path) -> OutputInspection:
     temp_candidates: list[Path] = []
     valid_video_candidates: list[Path] = []
     audio_only_candidates: list[Path] = []
+    ambiguous_stream_candidates: list[Path] = []
+    orphan_stream_candidates: list[Path] = []
     zero_byte_candidates: list[Path] = []
 
     for candidate in sorted(output_stem.parent.glob(f"{output_stem.name}.*")):
@@ -604,14 +607,27 @@ def inspect_output_stem(output_stem: Path) -> OutputInspection:
         if is_audio_only_file(candidate):
             audio_only_candidates.append(candidate)
             continue
+        if youtube_format_id_from_name(candidate) and candidate.suffix.lower() in VIDEO_FILE_SUFFIXES:
+            ambiguous_stream_candidates.append(candidate)
+            continue
         if candidate.suffix.lower() in VIDEO_FILE_SUFFIXES:
             valid_video_candidates.append(candidate)
             continue
         valid_video_candidates.append(candidate)
 
+    # Without ffprobe, a single raw stream file like .f334.webm is ambiguous:
+    # it may be audio-only. Only treat stream files as complete if there is
+    # enough companion media with the same base name to imply a full pair.
+    if not valid_video_candidates and ambiguous_stream_candidates:
+        if len(ambiguous_stream_candidates) + len(audio_only_candidates) >= 2:
+            valid_video_candidates.append(ambiguous_stream_candidates[0])
+        else:
+            orphan_stream_candidates.extend(ambiguous_stream_candidates)
+
     return OutputInspection(
         valid_video_file=valid_video_candidates[0] if valid_video_candidates else None,
         audio_only_files=audio_only_candidates,
+        orphan_stream_files=orphan_stream_candidates,
         temp_files=temp_candidates,
         zero_byte_files=zero_byte_candidates,
     )
@@ -630,6 +646,13 @@ def log_incomplete_artifacts(output_stem: Path, inspection: OutputInspection) ->
             "Ignoring audio-only outputs for %s: %s",
             output_stem.name,
             ", ".join(str(path.name) for path in inspection.audio_only_files),
+        )
+
+    if inspection.orphan_stream_files:
+        logging.info(
+            "Ignoring orphan stream outputs for %s: %s",
+            output_stem.name,
+            ", ".join(str(path.name) for path in inspection.orphan_stream_files),
         )
 
     if inspection.zero_byte_files:
@@ -666,6 +689,7 @@ def cleanup_incomplete_outputs(output_stem: Path, root_to_prune: Path) -> list[P
         inspection.temp_files
         + inspection.zero_byte_files
         + inspection.audio_only_files
+        + inspection.orphan_stream_files
     ):
         path.unlink(missing_ok=True)
         deleted_paths.append(path)
